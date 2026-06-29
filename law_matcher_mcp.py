@@ -113,8 +113,11 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
 
     # 🔥 FastMCP가 SSE endpoint (/sse)을 자동 생성
+    """
     mcp.run(
         transport="sse",
         host="0.0.0.0",
         port=port
     )
+    """
+    mcp.run(transport="sse")
