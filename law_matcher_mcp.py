@@ -43,7 +43,7 @@ def create_default_csv_if_missing():
 
 
 # =========================
-# INDEX
+# INDEX (요청하신 TF-IDF 로직 적용)
 # =========================
 def get_index(csv_path, col):
     if (
@@ -54,12 +54,14 @@ def get_index(csv_path, col):
 
     df = pd.read_csv(csv_path, encoding="utf-8-sig").dropna()
 
+    # TF-IDF 분절 및 피팅 진행 (어절 및 캐릭터 N-Gram 분석)
+    corpus = df[col].astype(str).str.strip().tolist()
     vec = TfidfVectorizer(
+        token_pattern=r"(?u)\b\w+\b",
         analyzer="char_wb",
         ngram_range=(2, 4)
     )
-
-    mat = vec.fit_transform(df[col].astype(str).tolist())
+    mat = vec.fit_transform(corpus)
 
     _cache.update({
         "df": df,
@@ -110,14 +112,5 @@ def get_similar_pairs(
 # RUN (핵심: /sse 유지)
 # =========================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-
-    # 🔥 FastMCP가 SSE endpoint (/sse)을 자동 생성
-    """
-    mcp.run(
-        transport="sse",
-        host="0.0.0.0",
-        port=port
-    )
-    """
+    # Render 등 외부 환경에서 제공하는 PORT 변수를 활용할 수 있도록 설정
     mcp.run(transport="sse")
