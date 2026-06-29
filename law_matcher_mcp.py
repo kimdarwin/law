@@ -187,21 +187,30 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
 
 # 3. SSE 전송 인프라 및 스타렛 라우팅 설정
 # 1.1.6 에서는 호스트 엔드포인트 세부 파이프가 보다 정밀하게 바인딩되어야 합니다.
+from starlette.responses import Response
+
 sse = SseServerTransport("/messages")
 
 async def handle_sse_endpoint(request):
+    """
+    starlette 라우트에서 'TypeError: NoneType object is not callable'을 예방하기 위해
+    비동기 처리를 안전하게 완수하고 빈 Response 객체를 반환하도록 구조를 변경합니다.
+    """
     async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
         await server.run(
             read_stream, 
             write_stream, 
-            # 1.1.6 버전용 초기 설정 바인딩 호출
-            server.create_initialization_options() 
+            server.create_initialization_options()
         )
+    return Response(status_code=200)
 
 async def handle_message_endpoint(request):
+    """메시지 통신 후 200 OK Response를 확실히 명시하여 오류 차단"""
     await sse.handle_post_request(request.scope, request.receive, request._send)
+    return Response(status_code=200)
 
 
+# 스타렛(Starlette) 앱 및 라우트 선언
 app = Starlette(
     debug=True,
     routes=[
