@@ -19,7 +19,13 @@ ENV PYTHONUNBUFFERED=1
 #ENTRYPOINT ["python", "law_matcher_mcp.py"]
 #ENTRYPOINT ["fastmcp", "run", "law_matcher_mcp.py"]
 ENTRYPOINT [
-  "sh",
-  "-c",
-  "fastmcp run law_matcher_mcp.py --transport sse --host 0.0.0.0 --port $PORT"
+  "fastmcp",
+  "run",
+  "law_matcher_mcp.py",
+  "--transport",
+  "sse",
+  "--host",
+  "0.0.0.0",
+  "--port",
+  "8000"
 ]
