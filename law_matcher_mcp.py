@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 # =========================
 # MCP SERVER
 # =========================
-# 최신 mcp SDK에서는 host/port를 FastMCP 생성자에서 직접 지정할 수 있습니다.
-# Render는 PORT 환경변수로 포트를 지정하므로 이를 그대로 사용합니다.
 PORT = int(os.environ.get("PORT", 8000))
 
 mcp = FastMCP(
@@ -33,7 +31,8 @@ _cache = {
     "vec": None,
     "mat": None,
     "col": None,
-    "path": None,  # 캐시 키에 csv_path도 포함
+    "output_col": None,
+    "path": None,
 }
 
 
@@ -67,12 +66,14 @@ def create_default_csv_if_missing():
 
 
 # =========================
-# INDEX (TF-IDF 로직)
+# INDEX (TF-IDF 로직 및 필터링)
 # =========================
-def get_index(csv_path: str, col: str):
+def get_index(csv_path: str, input_col: str, output_col: str):
+    # 캐시 키에 output_col 정보도 함께 검증하여 변경 시 대응하도록 합니다.
     if (
         _cache["df"] is not None
-        and _cache["col"] == col
+        and _cache["col"] == input_col
+        and _cache.get("output_col") == output_col
         and _cache["path"] == csv_path
     ):
         return _cache["df"], _cache["vec"], _cache["mat"]
@@ -80,15 +81,26 @@ def get_index(csv_path: str, col: str):
     logger.info(f"Loading csv from: {os.path.abspath(csv_path)}")
     df = pd.read_csv(csv_path, encoding="utf-8-sig")
 
-    if col not in df.columns:
+    # 필수 컬럼 검증
+    if input_col not in df.columns:
         raise ValueError(
-            f"'{col}' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {list(df.columns)}"
+            f"입력 컬럼 '{input_col}'을 찾을 수 없습니다. 사용 가능한 컬럼: {list(df.columns)}"
+        )
+    if output_col not in df.columns:
+        raise ValueError(
+            f"출력 컬럼 '{output_col}'을 찾을 수 없습니다. 사용 가능한 컬럼: {list(df.columns)}"
         )
 
-    df = df.dropna(subset=[col]).reset_index(drop=True)
-    logger.info(f"Loaded {len(df)} rows, columns: {list(df.columns)}")
+    # 1. 두 컬럼에 대해 결측치(NaN)가 있는 행 제거
+    df = df.dropna(subset=[input_col, output_col])
 
-    corpus = df[col].astype(str).str.strip().tolist()
+    # 2. 공백 제거 후 빈 문자열("") 상태인 행 제거 (필터링 핵심 부분)
+    df = df[df[input_col].astype(str).str.strip() != ""]
+    df = df[df[output_col].astype(str).str.strip() != ""].reset_index(drop=True)
+
+    logger.info(f"Loaded {len(df)} valid rows after filtering empty values. Columns: {list(df.columns)}")
+
+    corpus = df[input_col].astype(str).str.strip().tolist()
     vec = TfidfVectorizer(
         token_pattern=r"(?u)\b\w+\b",
         analyzer="char_wb",
@@ -100,7 +112,8 @@ def get_index(csv_path: str, col: str):
         "df": df,
         "vec": vec,
         "mat": mat,
-        "col": col,
+        "col": input_col,
+        "output_col": output_col,
         "path": csv_path,
     })
     return df, vec, mat
@@ -115,19 +128,20 @@ def get_similar_pairs(
     csv_path: str = DEFAULT_CSV_PATH,
     input_column: str = "원문",
     output_column: str = "이지리드 문장",
-    max_results: int = 40,
+    max_results: int = 30,
 ) -> str:
-    """TF-IDF 기반 법률 유사문장 검색"""
+    """TF-IDF 기반 법률 유사문장 검색 (비어있는 대상 문장은 검색 대상에서 자동 제외됩니다)"""
     if csv_path == DEFAULT_CSV_PATH:
         create_default_csv_if_missing()
 
-    df, vec, mat = get_index(csv_path, input_column)
-
-    if output_column not in df.columns:
-        return f"'{output_column}' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {list(df.columns)}"
+    try:
+        # 입력 컬럼과 출력 컬럼을 모두 인자로 전달하여 색인 시점에 필터링을 적용합니다.
+        df, vec, mat = get_index(csv_path, input_column, output_column)
+    except ValueError as e:
+        return str(e)
 
     if len(df) == 0:
-        return "검색할 데이터가 없습니다 (CSV가 비어있거나 모두 결측치로 제거됨)."
+        return "검색할 데이터가 없습니다 (CSV가 비어있거나 필터링 후 남은 행이 없음)."
 
     qv = vec.transform([query])
     scores = cosine_similarity(qv, mat).flatten()
@@ -138,8 +152,7 @@ def get_similar_pairs(
     results = []
     for i in idxs:
         row = df.iloc[i]
-        if(row[output_column].strip()==""):
-            continue
+        
         src = re.sub(r"\s+", " ", str(row[input_column]))
         tgt = re.sub(r"\s+", " ", str(row[output_column]))
         results.append(f"입력: {src}\n출력: {tgt}")
@@ -150,11 +163,5 @@ def get_similar_pairs(
 # =========================
 # RUN
 # =========================
-# 최신 mcp SDK 권장 사항:
-#   - "sse"는 레거시 transport로, 최신 클라이언트/배포 환경에서는
-#     "streamable-http"가 권장됩니다 (단일 HTTP 엔드포인트로 요청/응답/스트리밍 모두 처리).
-#   - 기존 SSE 클라이언트와의 호환이 꼭 필요하면 transport="sse"를 유지해도 되지만,
-#     이번 ASGI 'NoneType' 오류가 SSE transport의 라우팅 레이어에서 발생했으므로
-#     streamable-http로 전환하는 것을 권장합니다.
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
