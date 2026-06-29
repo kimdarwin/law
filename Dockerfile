@@ -10,9 +10,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. 소스 코드 복사 (데이터셋 CSV 파일도 프로젝트 내 포함되도록 처리 가능)
 COPY law_matcher_mcp.py .
+COPY law2easy.csv .
 
 # 5. 실행 환경 변수 및 입출력 버퍼 설정
 ENV PYTHONUNBUFFERED=1
 
 # 6. 표준 입출력(STDIO)을 통한 MCP 통신 실행
-ENTRYPOINT ["python", "law_matcher_mcp.py"]
+#ENTRYPOINT ["python", "law_matcher_mcp.py"]
+ENTRYPOINT ["fastmcp", "run", "law_matcher_mcp.py"]
