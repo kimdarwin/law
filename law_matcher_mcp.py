@@ -19,12 +19,17 @@ _cache = {
     "mat": None,
     "col": None,
 }
-
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # =========================
 # CSV 생성
 # =========================
 def create_default_csv_if_missing():
+    logger.info(f"DEFAULT_CSV_PATH = {DEFAULT_CSV_PATH}")
+    logger.info(f"cwd = {os.getcwd()}")
+    logger.info(f"exists? = {os.path.exists(DEFAULT_CSV_PATH)}")
     if not os.path.exists(DEFAULT_CSV_PATH):
         df = pd.DataFrame({
             "id": [1, 2, 3],
