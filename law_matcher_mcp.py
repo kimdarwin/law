@@ -167,6 +167,8 @@ def get_similar_pairs(
     except Exception as e:
         return f"작업 중 예외 발생: {str(e)}"
 
+import os
 
+port = int(os.environ.get("PORT", 8000))
 if __name__ == "__main__":
     mcp.run()
