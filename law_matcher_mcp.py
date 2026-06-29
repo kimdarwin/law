@@ -175,7 +175,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     
     # sse 방식으로 실행하여 외부 포트(0.0.0.0)를 통해 대기하도록 설정합니다.
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    mcp.run(transport="sse", host="0.0.0.0", port=port) #render.com에서는 무시됨
     #asgi_app = mcp.jsonrpc_app
     
     #uvicorn.run(asgi_app, host="0.0.0.0", port=port)
