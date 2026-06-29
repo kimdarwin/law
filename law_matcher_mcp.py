@@ -1,14 +1,31 @@
 import os
-import pandas as pd
 import re
+import logging
+
+import pandas as pd
 from mcp.server.fastmcp import FastMCP
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # =========================
+# LOGGING
+# =========================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# =========================
 # MCP SERVER
 # =========================
-mcp = FastMCP("EasyLead Law Matcher")
+# 최신 mcp SDK에서는 host/port를 FastMCP 생성자에서 직접 지정할 수 있습니다.
+# Render는 PORT 환경변수로 포트를 지정하므로 이를 그대로 사용합니다.
+PORT = int(os.environ.get("PORT", 8000))
+
+mcp = FastMCP(
+    "EasyLead Law Matcher",
+    host="0.0.0.0",
+    port=PORT,
+)
+
 DEFAULT_CSV_PATH = "law2easy.csv"
 
 _cache = {
@@ -16,12 +33,8 @@ _cache = {
     "vec": None,
     "mat": None,
     "col": None,
-    "path": None,   # 캐시 키에 csv_path도 포함 (버그 수정)
+    "path": None,  # 캐시 키에 csv_path도 포함
 }
-
-import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 # =========================
@@ -30,8 +43,10 @@ logger = logging.getLogger(__name__)
 def create_default_csv_if_missing():
     logger.info(f"DEFAULT_CSV_PATH = {DEFAULT_CSV_PATH}")
     logger.info(f"cwd = {os.getcwd()}")
-    logger.info(f"exists? = {os.path.exists(DEFAULT_CSV_PATH)}")
-    if not os.path.exists(DEFAULT_CSV_PATH):
+    exists = os.path.exists(DEFAULT_CSV_PATH)
+    logger.info(f"exists? = {exists}")
+
+    if not exists:
         logger.warning("CSV not found — creating dummy CSV.")
         df = pd.DataFrame({
             "id": [1, 2, 3],
@@ -55,7 +70,6 @@ def create_default_csv_if_missing():
 # INDEX (TF-IDF 로직)
 # =========================
 def get_index(csv_path: str, col: str):
-    # 캐시 적중 조건에 csv_path까지 포함 (버그 수정)
     if (
         _cache["df"] is not None
         and _cache["col"] == col
@@ -71,16 +85,14 @@ def get_index(csv_path: str, col: str):
             f"'{col}' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {list(df.columns)}"
         )
 
-    # 전체 dropna() 대신 input_column 기준으로만 결측 제거 (버그 수정)
     df = df.dropna(subset=[col]).reset_index(drop=True)
-
     logger.info(f"Loaded {len(df)} rows, columns: {list(df.columns)}")
 
     corpus = df[col].astype(str).str.strip().tolist()
     vec = TfidfVectorizer(
         token_pattern=r"(?u)\b\w+\b",
         analyzer="char_wb",
-        ngram_range=(2, 4)
+        ngram_range=(2, 4),
     )
     mat = vec.fit_transform(corpus)
 
@@ -102,9 +114,10 @@ def get_similar_pairs(
     query: str,
     csv_path: str = DEFAULT_CSV_PATH,
     input_column: str = "원문",
-    output_column: str = "이지리드 문장",  # 기본값을 실제 컬럼명과 일치시킴 (버그 수정)
+    output_column: str = "이지리드 문장",
     max_results: int = 10,
 ) -> str:
+    """TF-IDF 기반 법률 유사문장 검색"""
     if csv_path == DEFAULT_CSV_PATH:
         create_default_csv_if_missing()
 
@@ -133,7 +146,13 @@ def get_similar_pairs(
 
 
 # =========================
-# RUN (핵심: /sse 유지)
+# RUN
 # =========================
+# 최신 mcp SDK 권장 사항:
+#   - "sse"는 레거시 transport로, 최신 클라이언트/배포 환경에서는
+#     "streamable-http"가 권장됩니다 (단일 HTTP 엔드포인트로 요청/응답/스트리밍 모두 처리).
+#   - 기존 SSE 클라이언트와의 호환이 꼭 필요하면 transport="sse"를 유지해도 되지만,
+#     이번 ASGI 'NoneType' 오류가 SSE transport의 라우팅 레이어에서 발생했으므로
+#     streamable-http로 전환하는 것을 권장합니다.
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    mcp.run(transport="streamable-http")
