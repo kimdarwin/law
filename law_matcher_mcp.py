@@ -168,11 +168,12 @@ def get_similar_pairs(
         return f"작업 중 예외 발생: {str(e)}"
 
 import os
-
+import uvicorn
 
 if __name__ == "__main__":
     # Render.com이 주입해주는 환경 변수 포트를 기본으로 사용합니다.
     port = int(os.environ.get("PORT", 8000))
     
     # sse 방식으로 실행하여 외부 포트(0.0.0.0)를 통해 대기하도록 설정합니다.
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    #mcp.run(transport="sse", host="0.0.0.0", port=port)
+    uvicorn.run(mcp.app, host="0.0.0.0", port=port)
