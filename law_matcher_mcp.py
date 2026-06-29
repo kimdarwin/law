@@ -2,12 +2,15 @@ import os
 import re
 import pandas as pd
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# 1. FastMCP 인스턴스 초기화
-mcp = FastMCP("EasyLead Law Matcher")
+# 1. 공식 로우레벨 MCP Server 인스턴스 정의
+server = Server("EasyLead Law Matcher")
 
 # 전역 캐싱 변수
 _cached_csv_path = None
@@ -85,25 +88,46 @@ def get_or_build_index(csv_path: str, col_in: str):
     return df, vectorizer, tfidf_matrix
 
 
-# 2. MCP 도구 정의
-@mcp.tool()
-def get_similar_pairs(
-    query: str,
-    csv_path: str = DEFAULT_CSV_PATH,
-    input_column: str = None,
-    output_column: str = None,
-    max_results: int = 10
-) -> str:
-    """
-    어려운 판례나 법률 문장(query)을 입력하면, 데이터셋(CSV)에서 TF-IDF 기술을 사용해 
-    가장 의미적으로 유사한 상위 10개의 번역 대조쌍(Few-shot 예시)을 추출하여 반환합니다.
-    """
+# 2. MCP 도구 리스트 등록 (mcp.tool 데코레이터 기능 대체)
+@server.list_tools()
+async def handle_list_tools():
+    import mcp.types as types
+    return [
+        types.Tool(
+            name="get_similar_pairs",
+            description="어려운 판례나 법률 문장(query)을 입력하면, 데이터셋(CSV)에서 유사한 이지리드 번역 대조쌍 상위 10개를 반환합니다.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "유사도를 판단할 기준 판결문 원문"},
+                    "csv_path": {"type": "string", "description": "CSV 데이터베이스 파일 경로", "default": DEFAULT_CSV_PATH},
+                    "input_column": {"type": "string", "description": "원문 컬럼 이름 (생략 가능)"},
+                    "output_column": {"type": "string", "description": "쉬운 말 번역 컬럼 이름 (생략 가능)"},
+                    "max_results": {"type": "integer", "description": "도출할 최대 결과 개수", "default": 10}
+                },
+                "required": ["query"]
+            }
+        )
+    ]
+
+
+@server.call_tool()
+async def handle_call_tool(name: str, arguments: dict):
+    if name != "get_similar_pairs":
+        raise ValueError(f"알 수 없는 도구 이름: {name}")
+
+    query = arguments.get("query")
+    csv_path = arguments.get("csv_path", DEFAULT_CSV_PATH)
+    input_column = arguments.get("input_column")
+    output_column = arguments.get("output_column")
+    max_results = arguments.get("max_results", 10)
+
     try:
         if csv_path == DEFAULT_CSV_PATH:
             create_default_csv_if_missing()
 
         if not os.path.exists(csv_path):
-            return f"오류: '{csv_path}' 경로에 파일이 존재하지 않습니다."
+            return [types.TextContent(type="text", text=f"오류: '{csv_path}' 경로에 파일이 존재하지 않습니다.")]
 
         try:
             temp_df = pd.read_csv(csv_path, encoding="utf-8-sig", nrows=1)
@@ -146,25 +170,49 @@ def get_similar_pairs(
             if match_count >= max_results:
                 break
 
+        import mcp.types as types
         if not few_shot_results:
-            return "일치하거나 유사한 판례 문장쌍 예시를 데이터에서 찾지 못했습니다."
+            return [types.TextContent(type="text", text="유사한 판례 문장쌍 예시를 찾지 못했습니다.")]
 
         header_info = f"[매칭 정보: {input_column} -> {output_column}]\n"
-        return header_info + "\n\n".join(few_shot_results)
+        return [types.TextContent(type="text", text=header_info + "\n\n".join(few_shot_results))]
 
     except Exception as e:
-        return f"작업 중 예외 발생: {str(e)}"
+        import mcp.types as types
+        return [types.TextContent(type="text", text=f"작업 중 예외 발생: {str(e)}")]
 
 
-# 3. Render.com 호환 프록시 헤더 설정 및 SSE 서버 스타트업
+# 3. SSE 전송 통로 및 공식 Starlette 인프라 독립 선언
+sse = SseServerTransport("/messages")
+
+async def handle_sse_endpoint(request):
+    """SSE 연결 채널 엔드포인트"""
+    async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+async def handle_message_endpoint(request):
+    """클라이언트 메시지 전송 엔드포인트"""
+    await sse.handle_post_request(request.scope, request.receive, request._send)
+
+
+# 스타렛(Starlette) 앱 생성 및 순수 라우트 수동 마운트
+app = Starlette(
+    debug=True,
+    routes=[
+        Route("/sse", endpoint=handle_sse_endpoint, methods=["GET"]),
+        Route("/messages", endpoint=handle_message_endpoint, methods=["POST"]),
+    ],
+)
+
+
+# 4. Render.com 맞춤형 uvicorn 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     
-    # Render.com 호스트 검증 에러(421/Request validation failed)를 해소하는 중요 네트워크 옵션 주입
     uvicorn.run(
-        mcp.app, 
+        app, 
         host="0.0.0.0", 
         port=port,
-        proxy_headers=True,           # 프록시 도메인 헤더(onrender.com) 신뢰 설정
-        forwarded_allow_ips="*"       # 모든 포워딩 사설 IP 대역 통과 허용
+        proxy_headers=True,           # 프록시 도메인 헤더 신뢰
+        forwarded_allow_ips="*"       # 모든 프록시 경유 IP 주소 통과 허용
     )
