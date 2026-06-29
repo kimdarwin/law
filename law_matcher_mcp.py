@@ -7,6 +7,7 @@ from mcp.server.sse import SseServerTransport
 import mcp.types as types
 from starlette.applications import Starlette
 from starlette.routing import Route
+from starlette.responses import Response
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -92,7 +93,7 @@ def get_or_build_index(csv_path: str, col_in: str):
 # 2. MCP 1.1.6 스타일 도구 선언 데코레이터 적용
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
-    """도구 목록을 호환되는 형태로 전송합니다."""
+    """도구 목록을 전송합니다."""
     return [
         types.Tool(
             name="get_similar_pairs",
@@ -186,17 +187,22 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
 
 
 # 3. SSE 전송 인프라 및 스타렛 라우팅 설정
-# 1.1.6 에서는 호스트 엔드포인트 세부 파이프가 보다 정밀하게 바인딩되어야 합니다.
-from starlette.responses import Response
-
-sse = SseServerTransport("/messages")
-
+# 프록시 도메인 문제를 피하기 위해, 요청 스트림이 닿는 순간의 실시간 절대 도메인 주소로 SseTransport를 재생성합니다.
 async def handle_sse_endpoint(request):
     """
-    starlette 라우트에서 'TypeError: NoneType object is not callable'을 예방하기 위해
-    비동기 처리를 안전하게 완수하고 빈 Response 객체를 반환하도록 구조를 변경합니다.
+    클라이언트의 Host 헤더를 실시간 판독하여 절대 경로 URL로 전송 포트를 매핑합니다.
     """
-    async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+    # 1. 요청 도메인 정보 획득 (HTTPS 및 프록시 헤더 대응)
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    
+    # 2. 실시간 절대 경로 주소 생성 (예: https://law-ss9n.onrender.com/messages)
+    absolute_messages_url = f"{scheme}://{host}/messages"
+    
+    # 3. 실시간으로 경로를 래핑한 SseServerTransport 생성 및 통신 개시
+    real_sse = SseServerTransport(absolute_messages_url)
+    
+    async with real_sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
         await server.run(
             read_stream, 
             write_stream, 
@@ -205,8 +211,10 @@ async def handle_sse_endpoint(request):
     return Response(status_code=200)
 
 async def handle_message_endpoint(request):
-    """메시지 통신 후 200 OK Response를 확실히 명시하여 오류 차단"""
-    await sse.handle_post_request(request.scope, request.receive, request._send)
+    """메시지 전송을 임시 보정 처리"""
+    # POST /messages 요청은 별도의 인스턴스 전송 방식으로 다이렉트 래핑 처리합니다.
+    temp_sse = SseServerTransport("/messages")
+    await temp_sse.handle_post_request(request.scope, request.receive, request._send)
     return Response(status_code=200)
 
 
