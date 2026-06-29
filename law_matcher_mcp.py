@@ -115,7 +115,7 @@ def get_similar_pairs(
     csv_path: str = DEFAULT_CSV_PATH,
     input_column: str = "원문",
     output_column: str = "이지리드 문장",
-    max_results: int = 10,
+    max_results: int = 40,
 ) -> str:
     """TF-IDF 기반 법률 유사문장 검색"""
     if csv_path == DEFAULT_CSV_PATH:
@@ -138,6 +138,8 @@ def get_similar_pairs(
     results = []
     for i in idxs:
         row = df.iloc[i]
+        if(row[output_column].strip()==""):
+            continue
         src = re.sub(r"\s+", " ", str(row[input_column]))
         tgt = re.sub(r"\s+", " ", str(row[output_column]))
         results.append(f"입력: {src}\n출력: {tgt}")
