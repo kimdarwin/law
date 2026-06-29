@@ -4,12 +4,13 @@ import pandas as pd
 import uvicorn
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+import mcp.types as types
 from starlette.applications import Starlette
 from starlette.routing import Route
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# 1. 공식 로우레벨 MCP Server 인스턴스 정의
+# 1. 로우레벨 MCP Server 정의 (버전 1.1.6 호환)
 server = Server("EasyLead Law Matcher")
 
 # 전역 캐싱 변수
@@ -88,10 +89,10 @@ def get_or_build_index(csv_path: str, col_in: str):
     return df, vectorizer, tfidf_matrix
 
 
-# 2. MCP 도구 리스트 등록 (mcp.tool 데코레이터 기능 대체)
+# 2. MCP 1.1.6 스타일 도구 선언 데코레이터 적용
 @server.list_tools()
-async def handle_list_tools():
-    import mcp.types as types
+async def handle_list_tools() -> list[types.Tool]:
+    """도구 목록을 호환되는 형태로 전송합니다."""
     return [
         types.Tool(
             name="get_similar_pairs",
@@ -112,9 +113,13 @@ async def handle_list_tools():
 
 
 @server.call_tool()
-async def handle_call_tool(name: str, arguments: dict):
+async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
+    """도구 호출에 응답합니다."""
     if name != "get_similar_pairs":
         raise ValueError(f"알 수 없는 도구 이름: {name}")
+
+    if not arguments:
+        arguments = {}
 
     query = arguments.get("query")
     csv_path = arguments.get("csv_path", DEFAULT_CSV_PATH)
@@ -170,7 +175,6 @@ async def handle_call_tool(name: str, arguments: dict):
             if match_count >= max_results:
                 break
 
-        import mcp.types as types
         if not few_shot_results:
             return [types.TextContent(type="text", text="유사한 판례 문장쌍 예시를 찾지 못했습니다.")]
 
@@ -178,24 +182,26 @@ async def handle_call_tool(name: str, arguments: dict):
         return [types.TextContent(type="text", text=header_info + "\n\n".join(few_shot_results))]
 
     except Exception as e:
-        import mcp.types as types
         return [types.TextContent(type="text", text=f"작업 중 예외 발생: {str(e)}")]
 
 
-# 3. SSE 전송 통로 및 공식 Starlette 인프라 독립 선언
+# 3. SSE 전송 인프라 및 스타렛 라우팅 설정
+# 1.1.6 에서는 호스트 엔드포인트 세부 파이프가 보다 정밀하게 바인딩되어야 합니다.
 sse = SseServerTransport("/messages")
 
 async def handle_sse_endpoint(request):
-    """SSE 연결 채널 엔드포인트"""
     async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+        await server.run(
+            read_stream, 
+            write_stream, 
+            # 1.1.6 버전용 초기 설정 바인딩 호출
+            server.create_initialization_options() 
+        )
 
 async def handle_message_endpoint(request):
-    """클라이언트 메시지 전송 엔드포인트"""
     await sse.handle_post_request(request.scope, request.receive, request._send)
 
 
-# 스타렛(Starlette) 앱 생성 및 순수 라우트 수동 마운트
 app = Starlette(
     debug=True,
     routes=[
@@ -205,7 +211,7 @@ app = Starlette(
 )
 
 
-# 4. Render.com 맞춤형 uvicorn 실행
+# 4. Render.com 호환 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     
@@ -213,6 +219,6 @@ if __name__ == "__main__":
         app, 
         host="0.0.0.0", 
         port=port,
-        proxy_headers=True,           # 프록시 도메인 헤더 신뢰
-        forwarded_allow_ips="*"       # 모든 프록시 경유 IP 주소 통과 허용
+        proxy_headers=True,
+        forwarded_allow_ips="*"
     )

@@ -1,6 +1,5 @@
-mcp>=1.12
+mcp==1.1.6
 pandas>=2.0.0
 scikit-learn>=1.2.0
 uvicorn
 fastmcp
-fastapi
